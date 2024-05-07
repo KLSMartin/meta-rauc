@@ -1,0 +1,87 @@
+#!/bin/sh
+
+total=0
+good=0
+skip=0
+fail=0
+
+export SHARNESS_TEST_DIRECTORY=/usr/lib/rauc/tests/test
+export SHARNESS_BUILD_DIRECTORY=/usr/lib/rauc/tests
+# use drop-in scripts for grub-editenv, etc. as fallback
+export PATH="${PATH}:${SHARNESS_BUILD_DIRECTORY}/test/bin"
+
+cd "$SHARNESS_BUILD_DIRECTORY"
+
+# tests do not properly cleanup on failure
+test_cleanup () {
+	# killall dbus-daemon
+	# kill rauc test services
+	for _pid in $(ps x | grep '[r]auc' | grep '[c]onf=/usr/lib/rauc/tests' | awk '{print $1}' ); do
+		kill $_pid
+	done
+	for _mount in $(mount | grep '^/tmp/rauc-' | grep -o ' on [a-zA-Z0-9_/-]*' | sed 's/ on //' ); do
+		umount $_mount
+	done
+	# cleanup tmp files
+	rm -rf /tmp/rauc-*.raucb
+	rm -rf /tmp/rauc-*
+}
+
+
+# Run test script rauc.t
+# create grub env, similar to qemu-init
+grub-editenv test/grubenv.test create
+grub-editenv test/grubenv.test set ORDER="system0 system1" system0_TRY="0" system1_TRY="0" system0_OK="1" system1_OK="1"
+
+# create temp file to store outputs of rauc.t
+temp_file=$(mktemp /tmp/rauc-rauc.t.XXXX)
+cd "${SHARNESS_TEST_DIRECTORY}" || exit 1
+./rauc.t |
+	sed -u -e 's/^ok [0-9]* # skip rauc /SKIP: rauc.t\//g' -e 's/^ok [0-9]* - rauc /PASS: rauc.t\//g' -e 's/^not ok [0-9]* - rauc /FAIL: rauc.t\//g' |
+	tee "${temp_file}"
+
+skip=$(cat "${temp_file}" | grep '^SKIP: rauc.t' | wc -l)
+good=$(cat "${temp_file}" | grep '^PASS: rauc.t' | wc -l)
+fail=$(cat "${temp_file}" | grep '^FAIL: rauc.t' | wc -l)
+
+rm -rf "${temp_file}"
+test_cleanup
+
+
+# Run unit test binaries
+cd "${SHARNESS_BUILD_DIRECTORY}"
+for suite_bin in $(find "${SHARNESS_BUILD_DIRECTORY}" -mindepth 1 -maxdepth 1 -type f -name '*-test' | sort)
+do
+	suite="$(basename "${suite_bin}")"
+	res=0
+
+	# execute single tests to avoid one single failing one to abort the suite
+	if "${suite_bin}" --help >/dev/null; then
+
+		tests="$( "${suite_bin}" -l | grep '^/')"
+
+		for t in ${tests}; do
+			res=0
+			"${suite_bin}" -r "${t}" || res=$?
+			if [ "$res" = 0 ]; then
+				echo "PASS: ${suite}${t}"
+				good=$((good+1))
+			elif [ "$res" = 77 ]; then
+				echo "SKIP: ${suite}${t}"
+				skip=$((skip+1))
+			else
+				echo "FAIL: ${suite}${t}"
+				fail=$((fail+1))
+			fi
+			total=$((total+1))
+		done
+	else
+		total=$((total+1))
+		echo "Failed to start ${suite}"
+		echo "ERROR: ${suite}"
+	fi
+
+	test_cleanup
+done
+
+echo "OK: ${good} SKIP: ${skip} FAIL: ${fail}"

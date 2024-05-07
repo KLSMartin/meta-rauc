@@ -81,4 +81,11 @@ FILES:${PN}-service = "\
   ${datadir}/dbus-1/system-services/de.pengutronix.rauc.service \
   "
 
+inherit ptest
+PACKAGECONFIG:append = " ${@bb.utils.contains('DISTRO_FEATURES', 'ptest', 'installtests', '', d)}"
+
+SRC_URI += "file://run-ptest"
+
+RDEPENDS:${PN}-ptest += "${PN}-tests"
+
 PACKAGECONFIG ??= "service network streaming json nocreate gpt"
